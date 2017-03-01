@@ -4,7 +4,14 @@ project(swiftnav_piksi)
 ## Find catkin macros and libraries
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
-find_package(catkin REQUIRED COMPONENTS diagnostic_updater roscpp sensor_msgs std_srvs std_msgs)
+find_package(catkin REQUIRED COMPONENTS
+    diagnostic_updater 
+    roscpp 
+    sensor_msgs 
+    std_srvs 
+    std_msgs
+    swiftnav_piksi_msgs
+)
 
 ## System dependencies are found with CMake's conventions
 #find_package(swiftnav REQUIRED)
