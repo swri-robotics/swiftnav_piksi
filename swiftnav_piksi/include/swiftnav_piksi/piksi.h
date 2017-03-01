@@ -55,7 +55,7 @@ enum piksi_error
 	PIKSI_ERROR_TIMEOUT = -14
 };
 
-int piksi_open( const char *port );
+int piksi_open( const char *port, int baud );
 void piksi_close( const int8_t piksid );
 
 u8 piksi_spin( const int8_t piksid );
