@@ -18,8 +18,10 @@ set(RUNTIME_DEPS
 find_package(catkin REQUIRED COMPONENTS ${BUILD_DEPS})
 include_directories(${catkin_INCLUDE_DIRS})
 
-add_message_files(DIRECTORY msg FILES
-  Sample.msg
+add_message_files(FILES
+  SbpBaseline.msg
+  SbpGpsTime.msg
+  SbpPosLlh.msg
 )
 
 generate_messages(DEPENDENCIES ${MSG_DEPS})

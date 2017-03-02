@@ -140,21 +140,16 @@ u32 read_data( u8 *data, u32 num_bytes, void* context )
 {
 	int8_t piksid = *( int8_t* ) context;
 	u32 bytes_recv = 0;
-	u32 bytes_recvd = 0;
-	while( num_bytes )
-	{
-		bytes_recv = read( piksi_list[piksid]->fd, data, num_bytes );
-		if( bytes_recv <= 0 )
-			return 0;
-		num_bytes -= bytes_recv;
-		bytes_recvd += bytes_recv;
-	}
-	return bytes_recvd;
+	bytes_recv = read( piksi_list[piksid]->fd, data, num_bytes );
+	if( bytes_recv <= 0 )
+		return 0;
+	return bytes_recv;
 }
 
-
-int piksi_open( const char *port )
+int piksi_open( const char *port, int baud )
 {
+
+	printf("Baud %d\n",baud);
 	/* Step 1: Make sure the device opens OK */
 	int fd = open( port, O_RDWR | O_NOCTTY | O_NDELAY );
 	if( fd < 0 )
@@ -164,7 +159,7 @@ int piksi_open( const char *port )
 
 	struct termios options;
 	cfmakeraw( &options );
-	if( cfsetispeed( &options, B1000000 ) < 0 )
+	if( cfsetispeed( &options, baud2term(baud) ) < 0 )
 	{
 		close( fd );
 		return PIKSI_ERROR_IO;
@@ -196,7 +191,7 @@ int piksi_open( const char *port )
 
 	memcpy( piksi_list[mydev]->port, port, strlen( port ) + 1 );
 	piksi_list[mydev]->fd = fd;
-	piksi_list[mydev]->baud = baud2term( 1000000 );
+	piksi_list[mydev]->baud = baud2term(baud);
 
 	return mydev;
 

@@ -64,6 +64,8 @@ int main( int argc, char *argv[] )
 
 	std::string port;
 	nh_priv.param( "port", port, (const std::string)"/dev/ttyUSB0" );
+	int baud;
+	nh_priv.param( "baud", baud, 152000 );
 
 	swiftnav_piksi::PIKSI piksi( nh, nh_priv, port );
 
