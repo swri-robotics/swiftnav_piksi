@@ -204,9 +204,9 @@ namespace swiftnav_piksi
 
     driver->last_gps_fix_.err_horz = llh_msg->h_accuracy;
     driver->last_gps_fix_.err_vert = llh_msg->v_accuracy;
-    driver->last_gps_fix_.position_covariance[0] = llh_msg->h_accuracy;
-    driver->last_gps_fix_.position_covariance[4] = llh_msg->h_accuracy;
-    driver->last_gps_fix_.position_covariance[8] = llh_msg->v_accuracy;
+    driver->last_gps_fix_.position_covariance[0] = std::pow(llh_msg->h_accuracy, 2);
+    driver->last_gps_fix_.position_covariance[4] = std::pow(llh_msg->h_accuracy, 2);
+    driver->last_gps_fix_.position_covariance[8] = std::pow(llh_msg->v_accuracy, 2);
     driver->last_gps_fix_.position_covariance_type = 2;
 
     driver->gps_fix_pub_.publish(driver->last_gps_fix_);
@@ -324,8 +324,8 @@ namespace swiftnav_piksi
     //               possibly be used instead, though it may only give relative 
     //               direction of rover with respect to base, which is not the 
     //               heading that we care about.
-    double vx = sbp_vel.n;
-    double vy = sbp_vel.e;
+    double vx = vel_msg->vel_north;
+    double vy = vel_msg->vel_east;
     double speed = std::sqrt(vx*vx + vy*vy);
     driver->last_gps_fix_.speed = speed;
     driver->last_gps_fix_.track =  std::atan2(vy, vx) * 180.0 / M_PI;
