@@ -70,6 +70,7 @@ namespace swiftnav_piksi
   private:
     bool PiksiOpenNoLock();
     void PiksiCloseNoLock();
+    std::string GetFixDescription(uint8_t fix_type);
     void spin();
     void spinOnce();
 

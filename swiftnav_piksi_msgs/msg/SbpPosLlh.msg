@@ -15,11 +15,11 @@ float64 longitude
 # (quiet NaN if no altitude is available).
 float64 altitude
 
-# Horizontal position accuracy estimate (mm)
-uint16 h_accuracy
+# Horizontal position accuracy estimate (m)
+float64 h_accuracy
 
-# Vertical position accuracy estimate (mm)
-uint16 v_accuracy
+# Vertical position accuracy estimate (m)
+float64 v_accuracy
 
 # Number of satellites used in solution
 uint8 sats
@@ -32,3 +32,4 @@ bool raim_repair
 #Fix Mode (0 = Invalid, 1 = SPP, 2 = DGNSS, 3 = Float RTK, 4 = Fixed RTK)
 uint8 fix_type
 
+string fix_description

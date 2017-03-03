@@ -173,15 +173,16 @@ namespace swiftnav_piksi
     llh_msg->longitude = llh.lon;
     llh_msg->altitude = llh.height;
 
-    llh_msg->h_accuracy = llh.h_accuracy;
-    llh_msg->v_accuracy = llh.v_accuracy;
+    llh_msg->h_accuracy = static_cast<double>(llh.h_accuracy) / 1000.0;
+    llh_msg->v_accuracy = static_cast<double>(llh.v_accuracy) / 1000.0;
 
     llh_msg->sats = llh.n_sats;
 
     //flags
     llh_msg->raim_repair = ((llh.flags & 0x0080) >> 7);
     llh_msg->fix_type = (llh.flags & 0x007);
-		
+    llh_msg->fix_description = driver->GetFixDescription(llh_msg->fix_type);
+
     driver->llh_pub_.publish(llh_msg);
     return;
   }
@@ -222,16 +223,17 @@ namespace swiftnav_piksi
     baseline_msg->header.stamp = ros::Time::now( );
 
     baseline_msg->time_of_week = sbp_ned.tow;
-    baseline_msg->north = sbp_ned.n;
-    baseline_msg->east = sbp_ned.e;
-    baseline_msg->down = sbp_ned.d;
-    baseline_msg->h_accuracy = sbp_ned.h_accuracy;
-    baseline_msg->v_accuracy = sbp_ned.v_accuracy;
+    baseline_msg->north = static_cast<double>(sbp_ned.n) / 1000.0;
+    baseline_msg->east = static_cast<double>(sbp_ned.e) / 1000.0;
+    baseline_msg->down = static_cast<double>(sbp_ned.d) / 1000.0;
+    baseline_msg->h_accuracy = static_cast<double>(sbp_ned.h_accuracy) / 1000.0;
+    baseline_msg->v_accuracy = static_cast<double>(sbp_ned.v_accuracy) / 1000.0;
     baseline_msg->sats = sbp_ned.n_sats;
     baseline_msg->raim_repair = ((sbp_ned.flags & 0x0080) >> 7);
     baseline_msg->fix_type = (sbp_ned.flags & 0x0007);
+    baseline_msg->fix_description = driver->GetFixDescription(baseline_msg->fix_type);
 
-    driver->rtk_pub_.publish( baseline_msg );
+    driver->rtk_pub_.publish(baseline_msg);
     return;
   }
 
@@ -257,6 +259,31 @@ namespace swiftnav_piksi
     return;
   }
 
+  std::string Piksi::GetFixDescription(uint8_t fix_type)
+  {
+    std::string fix_description("");
+    switch (fix_type)
+    {
+    case 0:
+      fix_description = std::string("Invalid");
+      break;
+    case 1:
+      fix_description = std::string("SPP");
+      break;
+    case 2:
+      fix_description = std::string("DGNSS");
+      break;
+    case 3:
+      fix_description = std::string("Float RTK");
+      break;
+    case 4:
+      fix_description = std::string("Fixed RTK");
+      break;
+    default: 
+      fix_description = "Invalid";
+    }
+    return fix_description;
+  }
   void Piksi::spin()
   {
     while (ros::ok())

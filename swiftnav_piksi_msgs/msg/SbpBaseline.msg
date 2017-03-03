@@ -5,20 +5,20 @@ std_msgs/Header header
 # GPS Time of Week (ms)
 uint32 time_of_week
 
-# Baseline North coordinate
-int32 north
+# Baseline North coordinate (m)
+float64 north
 
-# Baseline East coordinate
-int32 east
+# Baseline East coordinate (m)
+float64 east
 
-# Baseline Down coordinate
-int32 down
+# Baseline Down coordinate (m)
+float64 down
 
-# Horizontal position accuracy estimate (mm)
-uint16 h_accuracy
+# Horizontal position accuracy estimate (m)
+float64 h_accuracy
 
-# Vertical position accuracy estimate (mm)
-uint16 v_accuracy
+# Vertical position accuracy estimate (m)
+float64 v_accuracy
 
 # Number of satellites used in solution
 uint8 sats
@@ -31,3 +31,4 @@ bool raim_repair
 #Fix Mode (0 = Invalid, 1 = SPP, 2 = DGNSS, 3 = Float RTK, 4 = Fixed RTK)
 uint8 fix_type
 
+string fix_description
