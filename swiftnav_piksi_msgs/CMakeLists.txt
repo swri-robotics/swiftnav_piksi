@@ -20,8 +20,10 @@ include_directories(${catkin_INCLUDE_DIRS})
 
 add_message_files(FILES
   SbpBaseline.msg
+  SbpDops.msg
   SbpGpsTime.msg
   SbpPosLlh.msg
+  SbpVelNed.msg
 )
 
 generate_messages(DEPENDENCIES ${MSG_DEPS})

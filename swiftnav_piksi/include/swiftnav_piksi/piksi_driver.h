@@ -47,6 +47,7 @@
 #include <ros/rate.h>
 #include <tf/tf.h>
 #include <nav_msgs/Odometry.h>
+#include <gps_common/GPSFix.h>
 
 #include <boost/thread.hpp>
 
@@ -93,6 +94,9 @@ namespace swiftnav_piksi
     ros::Publisher llh_pub_;
     ros::Publisher rtk_pub_;
     ros::Publisher time_pub_;
+    ros::Publisher gps_fix_pub_;
+
+    gps_common::GPSFix last_gps_fix_;
 
     ros::Rate spin_rate_;
     boost::thread spin_thread_;
