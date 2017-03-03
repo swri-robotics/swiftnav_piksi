@@ -46,131 +46,65 @@
 #include <ros/ros.h>
 #include <ros/rate.h>
 #include <tf/tf.h>
-#include <diagnostic_updater/diagnostic_updater.h>
-#include <diagnostic_updater/publisher.h>
-#include <diagnostic_updater/update_functions.h>
 #include <nav_msgs/Odometry.h>
 
 #include <boost/thread.hpp>
 
 namespace swiftnav_piksi
 {
-	void heartbeat_callback(u16 sender_id, u8 len, u8 msg[], void *context);
-	void time_callback(u16 sender_id, u8 len, u8 msg[], void *context);
-	void pos_llh_callback(u16 sender_id, u8 len, u8 msg[], void *context);
-	void dops_callback(u16 sender_id, u8 len, u8 msg[], void *context);
-	void baseline_ned_callback(u16 sender_id, u8 len, u8 msg[], void *context);
-	void vel_ned_callback(u16 sender_id, u8 len, u8 msg[], void *context);
+  void heartbeat_callback(u16 sender_id, u8 len, u8 msg[], void *context);
+  void time_callback(u16 sender_id, u8 len, u8 msg[], void *context);
+  void pos_llh_callback(u16 sender_id, u8 len, u8 msg[], void *context);
+  void dops_callback(u16 sender_id, u8 len, u8 msg[], void *context);
+  void baseline_ned_callback(u16 sender_id, u8 len, u8 msg[], void *context);
+  void vel_ned_callback(u16 sender_id, u8 len, u8 msg[], void *context);
 
-	class PIKSI
-	{
-	public:
-		PIKSI( const ros::NodeHandle &_nh = ros::NodeHandle( ),
-			const ros::NodeHandle &_nh_priv = ros::NodeHandle( "~" ),
-			const std::string _port = "/dev/ttyUSB0",
-			const int baud = 115200 );
-		~PIKSI( );
-		bool PIKSIOpen( );
-		void PIKSIClose( );
-	private:
-		bool PIKSIOpenNoLock( );
-		void PIKSICloseNoLock( );
-		void spin( );
-		void spinOnce( );
-		/*!
-		 * \brief Diagnostic update callback
-		 *
-		 * \author Scott K Logan
-		 *
-		 * Whenever the diagnostic_updater deems it necessary to update the values
-		 * therein, this callback is called to fetch the values from the device.
-		 *
-		 * \param[out] stat Structure in which to store the values for
-		 * diagnostic_updater to report
-		 */
-		void DiagCB( diagnostic_updater::DiagnosticStatusWrapper &stat );
+  class Piksi
+  {
+  public:
+    Piksi(const ros::NodeHandle& nh);
+    ~Piksi( );
+    bool PiksiOpen();
+    void PiksiClose();
 
-		ros::NodeHandle nh;
-		ros::NodeHandle nh_priv;
-		std::string port;
-		int baud;
-		std::string frame_id;
-		int8_t piksid;
-		boost::mutex cmd_lock;
+  private:
+    bool PiksiOpenNoLock();
+    void PiksiCloseNoLock();
+    void spin();
+    void spinOnce();
 
-		sbp_state_t state;
-		sbp_msg_callbacks_node_t heartbeat_callback_node;
-		sbp_msg_callbacks_node_t time_callback_node;
-//		sbp_msg_callbacks_node_t pos_ecef_callback_node;
-		sbp_msg_callbacks_node_t pos_llh_callback_node;
-		sbp_msg_callbacks_node_t dops_callback_node;
-//		sbp_msg_callbacks_node_t baseline_ecef_callback_node;
-		sbp_msg_callbacks_node_t baseline_ned_callback_node;
-//		sbp_msg_callbacks_node_t vel_ecef_callback_node;
-		sbp_msg_callbacks_node_t vel_ned_callback_node;
+    ros::NodeHandle nh_;
+    ros::NodeHandle pnh_;
+    std::string port_;
+    int baud_;
+    std::string frame_id_;
+    int8_t piksid_;
+    boost::mutex cmd_lock;
 
-		/*
-		 * Diagnostic updater
-		 */
-		diagnostic_updater::Updater heartbeat_diag;
-		diagnostic_updater::Updater llh_diag;
-		diagnostic_updater::Updater rtk_diag;
-		/*
-		 * Normal acceptable update rates for LLH, RTK, Heartbeat
-		 */
-		double min_llh_rate;
-		double max_llh_rate;
-        double min_rtk_rate;
-        double max_rtk_rate;
-        double min_heartbeat_rate;
-        double max_heartbeat_rate;
+    sbp_state_t state_;
+    sbp_msg_callbacks_node_t heartbeat_callback_node;
+    sbp_msg_callbacks_node_t time_callback_node;
+    sbp_msg_callbacks_node_t pos_llh_callback_node;
+    sbp_msg_callbacks_node_t dops_callback_node;
+    sbp_msg_callbacks_node_t baseline_ned_callback_node;
+    sbp_msg_callbacks_node_t vel_ned_callback_node;
 
-		/*!
-		 * \brief Diagnostic rate for gps/rtk publication
-		 */
-		diagnostic_updater::FrequencyStatus llh_pub_freq;
-		diagnostic_updater::FrequencyStatus rtk_pub_freq;
-		diagnostic_updater::FrequencyStatus heartbeat_pub_freq;
+    ros::Publisher llh_pub_;
+    ros::Publisher rtk_pub_;
+    ros::Publisher time_pub_;
 
-		ros::Publisher llh_pub;
-		ros::Publisher rtk_pub;
-		ros::Publisher time_pub;
+    ros::Rate spin_rate_;
+    boost::thread spin_thread_;
 
-        // Diagnostic Data
-		unsigned int io_failure_count;
-		unsigned int last_io_failure_count;
-		unsigned int open_failure_count;
-		unsigned int last_open_failure_count;
-        unsigned int heartbeat_flags;       //!< Flags from heartbeat msg
+    uint32_t open_failure_count_;
 
-        unsigned int num_llh_satellites;   //!< Number of satellites used in llh soln
-        unsigned int llh_status;           //!< Flags from POS_LLH message - bit 0: rtk
-        double llh_lat;
-        double llh_lon;
-        double llh_height;
-        double llh_h_accuracy;
-        double hdop;
-
-        unsigned int num_rtk_satellites;   //!< Number of satellites used in rtk soln
-        unsigned int rtk_status;           //!< Flags from BASELINE_NED message
-        double rtk_north;
-        double rtk_east;
-        double rtk_height;
-        double rtk_h_accuracy;
-        double rtk_vel_north;
-        double rtk_vel_east;
-        double rtk_vel_up;
-
-		ros::Rate spin_rate;
-		boost::thread spin_thread;
-
-		friend void heartbeat_callback(u16 sender_id, u8 len, u8 msg[], void *context);
-		friend void time_callback(u16 sender_id, u8 len, u8 msg[], void *context);
-		friend void pos_llh_callback(u16 sender_id, u8 len, u8 msg[], void *context);
-		friend void dops_callback(u16 sender_id, u8 len, u8 msg[], void *context);
-		friend void baseline_ned_callback(u16 sender_id, u8 len, u8 msg[], void *context);
-		friend void vel_ned_callback(u16 sender_id, u8 len, u8 msg[], void *context);
-	};
+    friend void heartbeat_callback(u16 sender_id, u8 len, u8 msg[], void *context);
+    friend void time_callback(u16 sender_id, u8 len, u8 msg[], void *context);
+    friend void pos_llh_callback(u16 sender_id, u8 len, u8 msg[], void *context);
+    friend void dops_callback(u16 sender_id, u8 len, u8 msg[], void *context);
+    friend void baseline_ned_callback(u16 sender_id, u8 len, u8 msg[], void *context);
+    friend void vel_ned_callback(u16 sender_id, u8 len, u8 msg[], void *context);
+  };
 }
 
 #endif /* _piksi_driver_hpp */
