@@ -19,7 +19,6 @@ namespace swiftnav_piksi
     nh_(nh),
     piksid_(-1),
     spin_rate_(2000),
-    spin_thread_(&Piksi::spin, this),
     open_failure_count_(0)
   {
     pnh_ = ros::NodeHandle("~");
@@ -32,15 +31,21 @@ namespace swiftnav_piksi
     time_pub_ = nh_.advertise<swiftnav_piksi_msgs::SbpGpsTime>("piksi/time", 2);
     gps_fix_pub_ = nh_.advertise<gps_common::GPSFix>("piksi/gps", 2);
 
-    ROS_INFO("Opening Piksi on %s at %d baud", port_.c_str( ), baud_);
-    if(!PiksiOpen( ))
+    ROS_INFO("Opening Piksi on %s at %d baud", port_.c_str(), baud_);
+    if(!PiksiOpen())
     {
-      ROS_ERROR( "Failed to open Piksi on %s at %d baud", port_.c_str( ), baud_);
+      ROS_ERROR( "Failed to open Piksi on %s at %d baud", port_.c_str(), baud_);
+      ros::shutdown();
+      return;
     }
     else
     {
-      ROS_INFO( "Piksi opened successfully on %s at %d baud", port_.c_str( ), baud_);
+      ROS_INFO( "Piksi opened successfully on %s at %d baud", port_.c_str(), baud_);
     }
+
+    // If we reach this point, we should be able to start the spin thread
+    boost::thread t(boost::bind(&Piksi::spin, this));
+    spin_thread_.swap(t);
   }
 
   Piksi::~Piksi()
