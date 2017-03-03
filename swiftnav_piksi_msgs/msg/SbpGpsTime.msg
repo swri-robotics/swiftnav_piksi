@@ -15,3 +15,4 @@ int32 nano
 # Time source (0 = None (invalid), 1 = GNSS)
 bool time_source
 
+string time_source_description

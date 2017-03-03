@@ -64,7 +64,7 @@ namespace swiftnav_piksi
   {
   public:
     Piksi(const ros::NodeHandle& nh);
-    ~Piksi( );
+    ~Piksi();
     bool PiksiOpen();
     void PiksiClose();
 
@@ -74,6 +74,7 @@ namespace swiftnav_piksi
     std::string GetFixDescription(uint8_t fix_type);
     void spin();
     void spinOnce();
+    double GetUtcTime(uint32_t ms);
 
     ros::NodeHandle nh_;
     ros::NodeHandle pnh_;
@@ -81,6 +82,7 @@ namespace swiftnav_piksi
     int baud_;
     std::string frame_id_;
     int8_t piksid_;
+    int32_t utc_offset_;
     boost::mutex cmd_lock;
 
     sbp_state_t state_;
@@ -91,9 +93,11 @@ namespace swiftnav_piksi
     sbp_msg_callbacks_node_t baseline_ned_callback_node;
     sbp_msg_callbacks_node_t vel_ned_callback_node;
 
+    ros::Publisher dop_pub_;
     ros::Publisher llh_pub_;
     ros::Publisher rtk_pub_;
     ros::Publisher time_pub_;
+    ros::Publisher vel_pub_;
     ros::Publisher gps_fix_pub_;
 
     gps_common::GPSFix last_gps_fix_;

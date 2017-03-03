@@ -18,6 +18,7 @@ namespace swiftnav_piksi
   Piksi::Piksi(const ros::NodeHandle& nh):
     nh_(nh),
     piksid_(-1),
+    utc_offset_(-18), // As of 2016-12-31
     spin_rate_(2000),
     open_failure_count_(0)
   {
@@ -26,9 +27,12 @@ namespace swiftnav_piksi
     pnh_.param("baud", baud_, 152000);
     pnh_.param("frame_id", frame_id_, std::string("piksi_gps"));
     
+    dop_pub_ = nh_.advertise<swiftnav_piksi_msgs::SbpDops>("piksi/dops", 2);
     llh_pub_ = nh_.advertise<swiftnav_piksi_msgs::SbpPosLlh>("piksi/pos_llh", 2);
     rtk_pub_ = nh_.advertise<swiftnav_piksi_msgs::SbpBaseline>("piksi/baseline", 2);
     time_pub_ = nh_.advertise<swiftnav_piksi_msgs::SbpGpsTime>("piksi/time", 2);
+    vel_pub_ = nh_.advertise<swiftnav_piksi_msgs::SbpVelNed>("piksi/vel", 2);
+
     gps_fix_pub_ = nh_.advertise<gps_common::GPSFix>("piksi/gps", 2);
 
     ROS_INFO("Opening Piksi on %s at %d baud", port_.c_str(), baud_);
@@ -148,10 +152,17 @@ namespace swiftnav_piksi
 
     time_msg->header.frame_id = driver->frame_id_;
     time_msg->header.stamp = ros::Time::now( );
-
+    
+    time_msg->weeks = time.wn;
     time_msg->time_of_week = time.tow;
     time_msg->nano = time.ns;
     time_msg->time_source = (time.flags & 0x0007);
+    std::string desc("None");
+    if (time_msg->time_source)
+    {
+      desc = std::string("GNSS");
+    }
+    time_msg->time_source_description = desc;
 
     driver->time_pub_.publish(time_msg);
 
@@ -181,8 +192,8 @@ namespace swiftnav_piksi
     llh_msg->longitude = llh.lon;
     llh_msg->altitude = llh.height;
 
-    llh_msg->h_accuracy = static_cast<double>(llh.h_accuracy) / 1000.0;
-    llh_msg->v_accuracy = static_cast<double>(llh.v_accuracy) / 1000.0;
+    llh_msg->h_accuracy = static_cast<double>(llh.h_accuracy) * 0.001;
+    llh_msg->v_accuracy = static_cast<double>(llh.v_accuracy) * 0.001;
 
     llh_msg->sats = llh.n_sats;
 
@@ -202,7 +213,7 @@ namespace swiftnav_piksi
     // TODO(kkozak): Set measurement status (i.e. rtk status)
     
     // TODO(kkozak): Fix time -- the commented method below is not correct.
-    // driver->last_gps_fix_.time = llh.tow;
+    driver->last_gps_fix_.time = driver->GetUtcTime(llh.tow);
     driver->last_gps_fix_.latitude = llh.lat;
     driver->last_gps_fix_.longitude = llh.lon;
     driver->last_gps_fix_.altitude = llh.height;
@@ -234,11 +245,13 @@ namespace swiftnav_piksi
     dop_msg->header.stamp = ros::Time::now();
 
     dop_msg->time_of_week = dops.tow;
-    dop_msg->gdop = static_cast<double>(dops.gdop) / 100.0;
-    dop_msg->pdop = static_cast<double>(dops.pdop) / 100.0;
-    dop_msg->tdop = static_cast<double>(dops.tdop) / 100.0;
-    dop_msg->hdop = static_cast<double>(dops.hdop) / 100.0;
-    dop_msg->vdop = static_cast<double>(dops.vdop) / 100.0;
+    dop_msg->gdop = static_cast<double>(dops.gdop) * 0.01;
+    dop_msg->pdop = static_cast<double>(dops.pdop) * 0.01;
+    dop_msg->tdop = static_cast<double>(dops.tdop) * 0.01;
+    dop_msg->hdop = static_cast<double>(dops.hdop) * 0.01;
+    dop_msg->vdop = static_cast<double>(dops.vdop) * 0.01;
+
+    driver->dop_pub_.publish(dop_msg);
 
     // TODO(kkozak): The spec shows the dops message as having flags, but that 
     //               field doesn't seem to exist with the version we're using
@@ -274,11 +287,11 @@ namespace swiftnav_piksi
     baseline_msg->header.stamp = ros::Time::now( );
 
     baseline_msg->time_of_week = sbp_ned.tow;
-    baseline_msg->north = static_cast<double>(sbp_ned.n) / 1000.0;
-    baseline_msg->east = static_cast<double>(sbp_ned.e) / 1000.0;
-    baseline_msg->down = static_cast<double>(sbp_ned.d) / 1000.0;
-    baseline_msg->h_accuracy = static_cast<double>(sbp_ned.h_accuracy) / 1000.0;
-    baseline_msg->v_accuracy = static_cast<double>(sbp_ned.v_accuracy) / 1000.0;
+    baseline_msg->north = static_cast<double>(sbp_ned.n) * 0.001;
+    baseline_msg->east = static_cast<double>(sbp_ned.e) * 0.001;
+    baseline_msg->down = static_cast<double>(sbp_ned.d) * 0.001;
+    baseline_msg->h_accuracy = static_cast<double>(sbp_ned.h_accuracy) * 0.001;
+    baseline_msg->v_accuracy = static_cast<double>(sbp_ned.v_accuracy) * 0.001;
     baseline_msg->sats = sbp_ned.n_sats;
     baseline_msg->raim_repair = ((sbp_ned.flags & 0x0080) >> 7);
     baseline_msg->fix_type = (sbp_ned.flags & 0x0007);
@@ -305,11 +318,11 @@ namespace swiftnav_piksi
     vel_msg->header.stamp = ros::Time::now();
 
     vel_msg->time_of_week = sbp_vel.tow;
-    vel_msg->vel_north = static_cast<double>(sbp_vel.n) / 1000.0;
-    vel_msg->vel_east = static_cast<double>(sbp_vel.e) / 1000.0;
-    vel_msg->vel_down = static_cast<double>(sbp_vel.d) / 1000.0;
-    vel_msg->h_accuracy = static_cast<double>(sbp_vel.h_accuracy) / 1000.0;
-    vel_msg->v_accuracy = static_cast<double>(sbp_vel.v_accuracy) / 1000.0;
+    vel_msg->vel_north = static_cast<double>(sbp_vel.n) * 0.001;
+    vel_msg->vel_east = static_cast<double>(sbp_vel.e) * 0.001;
+    vel_msg->vel_down = static_cast<double>(sbp_vel.d) * 0.001;
+    vel_msg->h_accuracy = static_cast<double>(sbp_vel.h_accuracy) * 0.001;
+    vel_msg->v_accuracy = static_cast<double>(sbp_vel.v_accuracy) * 0.001;
     
     vel_msg->sats = sbp_vel.n_sats;
     vel_msg->velocity_mode = (sbp_vel.flags & 0x0007);
@@ -324,6 +337,8 @@ namespace swiftnav_piksi
     }
     vel_msg->velocity_mode_description = desc;
 
+    driver->vel_pub_.publish(vel_msg);
+
     // TODO(kkozak): We're using this velocity message to infer heading for now,
     //               but the piksi can output a heading message that can 
     //               possibly be used instead, though it may only give relative 
@@ -336,6 +351,18 @@ namespace swiftnav_piksi
     driver->last_gps_fix_.track =  std::atan2(vy, vx) * 180.0 / M_PI;
     
     return;
+  }
+
+
+  double Piksi::GetUtcTime(uint32_t ms)
+  {
+    // TODO(kkozak): This needs to be verified, and offset needs to be captured
+    //               automatically, rather than from the default value.
+    // 2017-03-03 -- It looks right compared to online UTC clock
+    double seconds = static_cast<double>(ms) * 0.001 + utc_offset_;
+    int32_t days = seconds / 86400.0;
+    double utc_time = seconds - days * 86400.0;
+    return utc_time;
   }
 
   std::string Piksi::GetFixDescription(uint8_t fix_type)
