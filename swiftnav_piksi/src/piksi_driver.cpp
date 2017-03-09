@@ -376,7 +376,7 @@ namespace swiftnav_piksi
     double track = std::atan2(vy, vx) * 180.0 / M_PI;
     if (track < 0)
     {
-	track = track + 360.0;
+	  track = track + 360.0;
     }
     driver->last_gps_fix_.track = track;
     attempt_gps_fix_pub(driver);
