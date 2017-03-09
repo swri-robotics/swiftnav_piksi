@@ -59,6 +59,14 @@ namespace swiftnav_piksi
   void dops_callback(u16 sender_id, u8 len, u8 msg[], void *context);
   void baseline_ned_callback(u16 sender_id, u8 len, u8 msg[], void *context);
   void vel_ned_callback(u16 sender_id, u8 len, u8 msg[], void *context);
+  void attempt_gps_fix_pub(class Piksi* driver);
+
+  struct gps_fix_sync
+  {
+    uint32_t dops_time;
+    uint32_t pos_llh_time;
+    uint32_t vel_time;
+  };    
 
   class Piksi
   {
@@ -72,6 +80,8 @@ namespace swiftnav_piksi
     bool PiksiOpenNoLock();
     void PiksiCloseNoLock();
     std::string GetFixDescription(uint8_t fix_type);
+    int16_t GetFixCode(uint8_t fix_type);
+
     void spin();
     void spinOnce();
     double GetUtcTime(uint32_t ms);
@@ -102,6 +112,8 @@ namespace swiftnav_piksi
 
     gps_common::GPSFix last_gps_fix_;
 
+    gps_fix_sync gps_fix_sync_;
+
     ros::Rate spin_rate_;
     boost::thread spin_thread_;
 
@@ -113,6 +125,8 @@ namespace swiftnav_piksi
     friend void dops_callback(u16 sender_id, u8 len, u8 msg[], void *context);
     friend void baseline_ned_callback(u16 sender_id, u8 len, u8 msg[], void *context);
     friend void vel_ned_callback(u16 sender_id, u8 len, u8 msg[], void *context);
+    friend void attempt_gps_fix_pub(class Piksi* driver);
+
   };
 }
 

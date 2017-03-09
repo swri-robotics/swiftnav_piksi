@@ -34,6 +34,11 @@ namespace swiftnav_piksi
     vel_pub_ = nh_.advertise<swiftnav_piksi_msgs::SbpVelNed>("piksi/vel", 2);
 
     gps_fix_pub_ = nh_.advertise<gps_common::GPSFix>("piksi/gps", 2);
+    
+    //initial values must be different and not potentially valid
+    gps_fix_sync_.dops_time = 0;
+    gps_fix_sync_.pos_llh_time = 1;
+    gps_fix_sync_.vel_time = 2;
 
     ROS_INFO("Opening Piksi on %s at %d baud", port_.c_str(), baud_);
     if(!PiksiOpen())
@@ -169,6 +174,18 @@ namespace swiftnav_piksi
     return;
   }
 
+  //assure that all parts of last_gps_fix_ are from the same time stamp
+  void attempt_gps_fix_pub(class Piksi* driver)
+  {
+    if (driver->gps_fix_sync_.pos_llh_time == driver->gps_fix_sync_.dops_time)
+    {
+      if (driver->gps_fix_sync_.pos_llh_time == driver->gps_fix_sync_.vel_time)
+      {
+        driver->gps_fix_pub_.publish(driver->last_gps_fix_);
+      }
+    }
+  }
+
   void pos_llh_callback(u16 sender_id, u8 len, u8 msg[], void* context)
   {
     if (context == NULL)
@@ -182,6 +199,8 @@ namespace swiftnav_piksi
     msg_pos_llh_t llh = *(msg_pos_llh_t*) msg;
 
     swiftnav_piksi_msgs::SbpPosLlhPtr llh_msg( new swiftnav_piksi_msgs::SbpPosLlh );
+
+    driver->gps_fix_sync_.pos_llh_time = llh.tow;
 
     llh_msg->header.frame_id = driver->frame_id_;
     llh_msg->header.stamp = ros::Time::now( );
@@ -203,16 +222,14 @@ namespace swiftnav_piksi
 
     driver->llh_pub_.publish(llh_msg);
 
-    // TODO(kkozak): Synchronize the consituent messages for this GPS fix message.
     driver->last_gps_fix_.header = llh_msg->header;
 
-    // TODO(kkozak): Check to see if we can distinguish between sats visible
-    //               and used.
+    //unfortunatly libsbp does not support a message that provides the number
+    //of satellites visible...only the number used in the solution
     driver->last_gps_fix_.status.satellites_used = llh.n_sats;
     driver->last_gps_fix_.status.satellites_visible = llh.n_sats;
-    // TODO(kkozak): Set measurement status (i.e. rtk status)
+    driver->last_gps_fix_.status.status = driver->GetFixCode(llh_msg->fix_type);
     
-    // TODO(kkozak): Fix time -- the commented method below is not correct.
     driver->last_gps_fix_.time = driver->GetUtcTime(llh.tow);
     driver->last_gps_fix_.latitude = llh.lat;
     driver->last_gps_fix_.longitude = llh.lon;
@@ -225,9 +242,11 @@ namespace swiftnav_piksi
     driver->last_gps_fix_.position_covariance[8] = std::pow(llh_msg->v_accuracy, 2);
     driver->last_gps_fix_.position_covariance_type = 2;
 
-    driver->gps_fix_pub_.publish(driver->last_gps_fix_);
+    attempt_gps_fix_pub(driver);
     return;
   }
+
+
 
   void dops_callback(u16 sender_id, u8 len, u8 msg[], void* context)
   {
@@ -241,6 +260,9 @@ namespace swiftnav_piksi
 
     class Piksi* driver = (class Piksi*) context;
     swiftnav_piksi_msgs::SbpDopsPtr dop_msg(new swiftnav_piksi_msgs::SbpDops);
+
+    driver->gps_fix_sync_.dops_time = dops.tow;
+
     dop_msg->header.frame_id = driver->frame_id_;
     dop_msg->header.stamp = ros::Time::now();
 
@@ -250,21 +272,19 @@ namespace swiftnav_piksi
     dop_msg->tdop = static_cast<double>(dops.tdop) * 0.01;
     dop_msg->hdop = static_cast<double>(dops.hdop) * 0.01;
     dop_msg->vdop = static_cast<double>(dops.vdop) * 0.01;
+    dop_msg->raim_repair = ((dops.flags & 0x0080) >> 7);
+    dop_msg->fix_type = (dops.flags & 0x0007);
+    dop_msg->fix_description = driver->GetFixDescription(dop_msg->fix_type);
 
     driver->dop_pub_.publish(dop_msg);
 
-    // TODO(kkozak): The spec shows the dops message as having flags, but that 
-    //               field doesn't seem to exist with the version we're using
-    // dop_msg->raim_repair = ((dops.flags & 0x0080) >> 7);
-    // dop_msg->fix_type = (dops.flags & 0x0007);
-    // dop_msg->fix_description = driver->GetFixDescription(dop_msg->fix_type);
     driver->last_gps_fix_.gdop = dop_msg->gdop;
     driver->last_gps_fix_.pdop = dop_msg->pdop;
     driver->last_gps_fix_.tdop = dop_msg->tdop;
     driver->last_gps_fix_.hdop = dop_msg->hdop;
     driver->last_gps_fix_.vdop = dop_msg->vdop;
 
-    // TODO(kkozak): Publish dop_msg? 
+    attempt_gps_fix_pub(driver);
     return;
   }
 
@@ -314,6 +334,9 @@ namespace swiftnav_piksi
     msg_vel_ned_t sbp_vel = *(msg_vel_ned_t*) msg;
 
     swiftnav_piksi_msgs::SbpVelNedPtr vel_msg(new swiftnav_piksi_msgs::SbpVelNed);
+
+    driver->gps_fix_sync_.vel_time = sbp_vel.tow;
+
     vel_msg->header.frame_id = driver->frame_id_;
     vel_msg->header.stamp = ros::Time::now();
 
@@ -349,7 +372,8 @@ namespace swiftnav_piksi
     double speed = std::sqrt(vx*vx + vy*vy);
     driver->last_gps_fix_.speed = speed;
     driver->last_gps_fix_.track =  std::atan2(vy, vx) * 180.0 / M_PI;
-    
+    attempt_gps_fix_pub(driver);
+
     return;
   }
 
@@ -359,10 +383,37 @@ namespace swiftnav_piksi
     // TODO(kkozak): This needs to be verified, and offset needs to be captured
     //               automatically, rather than from the default value.
     // 2017-03-03 -- It looks right compared to online UTC clock
+    // check for utc_offset_ message
     double seconds = static_cast<double>(ms) * 0.001 + utc_offset_;
     int32_t days = seconds / 86400.0;
     double utc_time = seconds - days * 86400.0;
     return utc_time;
+  }
+
+  int16_t Piksi::GetFixCode(uint8_t fix_type)
+  {
+    int16_t fix_code;
+    switch (fix_type)
+    {
+    case 0:
+      fix_code = -1;
+      break;
+    case 1:
+      fix_code = 0;
+      break;
+    case 2:
+      fix_code = 18;
+      break;
+    case 3:
+      fix_code = 96;
+      break;
+    case 4:
+      fix_code = 97;
+      break;
+    default: 
+      fix_code = -1;
+    }
+    return fix_code;
   }
 
   std::string Piksi::GetFixDescription(uint8_t fix_type)
