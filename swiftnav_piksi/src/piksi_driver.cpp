@@ -371,7 +371,14 @@ namespace swiftnav_piksi
     double vy = vel_msg->vel_east;
     double speed = std::sqrt(vx*vx + vy*vy);
     driver->last_gps_fix_.speed = speed;
-    driver->last_gps_fix_.track =  std::atan2(vy, vx) * 180.0 / M_PI;
+
+    //piksi track is (-180,180] but we need [0,360)
+    double track = std::atan2(vy, vx) * 180.0 / M_PI;
+    if (track < 0)
+    {
+	track = track + 360.0;
+    }
+    driver->last_gps_fix_.track = track;
     attempt_gps_fix_pub(driver);
 
     return;
