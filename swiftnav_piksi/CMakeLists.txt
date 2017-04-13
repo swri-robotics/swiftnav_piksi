@@ -54,7 +54,7 @@ catkin_package(
    INCLUDE_DIRS include
    LIBRARIES piksi piksi_driver
    CATKIN_DEPENDS diagnostic_updater roscpp sensor_msgs std_srvs
-#  DEPENDS system_lib ${SBP_LIBRARIES}
+   DEPENDS SBP
 )
 
 ###########
