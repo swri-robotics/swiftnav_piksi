@@ -15,7 +15,7 @@ find_package(catkin REQUIRED COMPONENTS
 
 ## System dependencies are found with CMake's conventions
 #find_package(swiftnav REQUIRED)
-find_library(SBP sbp)
+find_package(Sbp 2.2.0 REQUIRED)
 
 ## Uncomment this if the package has a setup.py. This macro ensures
 ## modules and scripts declared therein get installed
@@ -54,7 +54,7 @@ catkin_package(
    INCLUDE_DIRS include
    LIBRARIES piksi piksi_driver
    CATKIN_DEPENDS diagnostic_updater roscpp sensor_msgs std_srvs
-#  DEPENDS system_lib
+   DEPENDS SBP
 )
 
 ###########
@@ -63,6 +63,7 @@ catkin_package(
 
 ## Specify additional locations of header files
 include_directories(include
+  ${SBP_INCLUDE_DIRS}
   ${catkin_INCLUDE_DIRS}
 )
 
@@ -83,10 +84,10 @@ add_executable(piksitest src/piksi.c)
 
 ## Specify libraries to link a library or executable target against
 target_link_libraries(piksi
-  ${SBP}
+  ${SBP_LIBRARIES}
 )
 target_link_libraries(piksitest
-  ${SBP}
+  ${SBP_LIBRARIES}
 )
 target_link_libraries(piksi_driver
   sbp
