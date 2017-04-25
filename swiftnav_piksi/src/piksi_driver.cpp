@@ -160,7 +160,7 @@ namespace swiftnav_piksi
     
     time_msg->weeks = time.wn;
     time_msg->time_of_week = time.tow;
-    time_msg->nano = time.ns;
+    time_msg->nano = time.ns_residual;
     time_msg->time_source = (time.flags & 0x0007);
     std::string desc("None");
     if (time_msg->time_source)
