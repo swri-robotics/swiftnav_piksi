@@ -2,467 +2,474 @@
 #include <libsbp/system.h>
 #include <libsbp/navigation.h>
 
-#include <iomanip>
-
 #include <swiftnav_piksi_msgs/SbpBaseline.h>
+#include <swiftnav_piksi_msgs/SbpDops.h>
 #include <swiftnav_piksi_msgs/SbpGpsTime.h>
 #include <swiftnav_piksi_msgs/SbpPosLlh.h>
+#include <swiftnav_piksi_msgs/SbpVelNed.h>
+#include <gps_common/GPSFix.h>
+
+#include <ros/ros.h>
 #include <ros/time.h>
 #include <tf/tf.h>
 
 namespace swiftnav_piksi
-{	
-	PIKSI::PIKSI( const ros::NodeHandle &_nh,
-		const ros::NodeHandle &_nh_priv,
-		const std::string _port,
-		const int _baud ) :
-		nh( _nh ),
-		nh_priv( _nh_priv ),
-		port( _port ),
-		baud( _baud),
-		frame_id( "gps" ),
-		piksid( -1 ),
+{
+  Piksi::Piksi(const ros::NodeHandle& nh):
+    nh_(nh),
+    piksid_(-1),
+    utc_offset_(-18), // As of 2016-12-31
+    spin_rate_(2000),
+    open_failure_count_(0)
+  {
+    pnh_ = ros::NodeHandle("~");
+    pnh_.param("port", port_, std::string("/dev/ttyUSB0"));
+    pnh_.param("baud", baud_, 152000);
+    pnh_.param("frame_id", frame_id_, std::string("piksi_gps"));
+    
+    dop_pub_ = nh_.advertise<swiftnav_piksi_msgs::SbpDops>("piksi/dops", 2);
+    llh_pub_ = nh_.advertise<swiftnav_piksi_msgs::SbpPosLlh>("piksi/pos_llh", 2);
+    rtk_pub_ = nh_.advertise<swiftnav_piksi_msgs::SbpBaseline>("piksi/baseline", 2);
+    time_pub_ = nh_.advertise<swiftnav_piksi_msgs::SbpGpsTime>("piksi/time", 2);
+    vel_pub_ = nh_.advertise<swiftnav_piksi_msgs::SbpVelNed>("piksi/vel", 2);
 
-        heartbeat_diag(nh, nh_priv, "ppiksi_time_diag"),
-        llh_diag(nh, nh_priv, "ppiksi_llh_diag"),
-        rtk_diag(nh, nh_priv, "ppiksi_rtk_diag"),
+    gps_fix_pub_ = nh_.advertise<gps_common::GPSFix>("piksi/gps", 2);
+    
+    //initial values must be different and not potentially valid
+    gps_fix_sync_.dops_time = 0;
+    gps_fix_sync_.pos_llh_time = 1;
+    gps_fix_sync_.vel_time = 2;
 
-		min_llh_rate( 0.5 ),
-		max_llh_rate( 50.0 ),
-		min_rtk_rate( 0.5 ),
-		max_rtk_rate( 50.0 ),
-		min_heartbeat_rate( 0.5 ),
-		max_heartbeat_rate( 50.0 ),
+    ROS_INFO("Opening Piksi on %s at %d baud", port_.c_str(), baud_);
+    if(!PiksiOpen())
+    {
+      ROS_ERROR( "Failed to open Piksi on %s at %d baud", port_.c_str(), baud_);
+      ros::shutdown();
+      return;
+    }
+    else
+    {
+      ROS_INFO( "Piksi opened successfully on %s at %d baud", port_.c_str(), baud_);
+    }
 
-		llh_pub_freq( diagnostic_updater::FrequencyStatusParam(
-                    &min_llh_rate, &max_llh_rate, 0.1, 50 ) ),
-		rtk_pub_freq( diagnostic_updater::FrequencyStatusParam( 
-                    &min_rtk_rate, &max_rtk_rate, 0.1, 50 ) ),
-		heartbeat_pub_freq( diagnostic_updater::FrequencyStatusParam( 
-                    &min_rtk_rate, &max_rtk_rate, 0.1, 50 ) ),
+    // If we reach this point, we should be able to start the spin thread
+    boost::thread t(boost::bind(&Piksi::spin, this));
+    spin_thread_.swap(t);
+  }
 
-		io_failure_count( 0 ),
-		last_io_failure_count( 0 ),
-		open_failure_count( 0 ),
-		last_open_failure_count( 0 ),
-        heartbeat_flags( 0 ),
+  Piksi::~Piksi()
+  {
+    spin_thread_.interrupt();
+    PiksiClose();
+  }
 
-        num_llh_satellites( 0 ),
-        llh_status( 0 ),
-        llh_lat( 0.0 ),
-        llh_lon( 0.0 ),
-        llh_height( 0.0 ),
-        llh_h_accuracy( 0.0 ),
-        hdop( 1.0 ),
+  bool Piksi::PiksiOpen()
+  {
+    boost::mutex::scoped_lock lock(cmd_lock);
+    return PiksiOpenNoLock();
+  }
 
-        rtk_status( 0 ),
-        num_rtk_satellites( 0 ),
-        rtk_north( 0.0 ),
-        rtk_east( 0.0 ),
-        rtk_height( 0.0 ),
-        rtk_h_accuracy( 0.04 ),     // 4cm
+  bool Piksi::PiksiOpenNoLock()
+  {
+    if (piksid_ >= 0)
+    {
+      return true;
+    }
 
-		spin_rate( 2000 ),      // call sbp_process this fast to avoid dropped msgs
-		spin_thread( &PIKSI::spin, this )
-	{
-		cmd_lock.unlock( );
-		heartbeat_diag.setHardwareID( "piksi heartbeat" );
-        heartbeat_diag.add( heartbeat_pub_freq );
+    piksid_ = piksi_open(port_.c_str(), baud_);
 
-		llh_diag.setHardwareID( "piksi lat/lon" );
-		llh_diag.add( llh_pub_freq );
+    if (piksid_ < 0)
+    {
+      open_failure_count_++;
+      return false;
+    }
 
-		rtk_diag.setHardwareID( "piksi rtk" );
-		rtk_diag.add( "Piksi Status", this, &PIKSI::DiagCB );
-		rtk_diag.add( rtk_pub_freq );
+    sbp_state_init(&state_);
+    sbp_state_set_io_context(&state_, &piksid_);
 
-		nh_priv.param( "frame_id", frame_id, (std::string)"gps" );
-	}
+    sbp_register_callback(&state_, SBP_MSG_HEARTBEAT,    &heartbeat_callback,    (void*) this, &heartbeat_callback_node);
+    sbp_register_callback(&state_, SBP_MSG_GPS_TIME,     &time_callback,         (void*) this, &time_callback_node);
+    sbp_register_callback(&state_, SBP_MSG_POS_LLH,      &pos_llh_callback,      (void*) this, &pos_llh_callback_node);
+    sbp_register_callback(&state_, SBP_MSG_DOPS,         &dops_callback,         (void*) this, &dops_callback_node);
+    sbp_register_callback(&state_, SBP_MSG_BASELINE_NED, &baseline_ned_callback, (void*) this, &baseline_ned_callback_node);
+    sbp_register_callback(&state_, SBP_MSG_VEL_NED,      &vel_ned_callback,      (void*) this, &vel_ned_callback_node);
+    
+    return true;
+  }
 
-	PIKSI::~PIKSI( )
-	{
-		spin_thread.interrupt( );
-		PIKSIClose( );
-	}
+  void Piksi::PiksiClose()
+  {
+    boost::mutex::scoped_lock lock(cmd_lock);
+    PiksiCloseNoLock();
+  }
 
-	bool PIKSI::PIKSIOpen( )
-	{
-		boost::mutex::scoped_lock lock( cmd_lock );
-		return PIKSIOpenNoLock( );
-	}
+  void Piksi::PiksiCloseNoLock()
+  {
+    int8_t old_piksid = piksid_;
+    if (piksid_ < 0)
+    {
+      return;
+    }
+    piksid_ = -1;
+    piksi_close(old_piksid);
 
-	bool PIKSI::PIKSIOpenNoLock( )
-	{
-		if( piksid >= 0 )
-			return true;
+    if (llh_pub_)
+    {
+      llh_pub_.shutdown();
+    }
 
-		piksid = piksi_open( port.c_str( ), baud );
+    if (time_pub_)
+    {
+      time_pub_.shutdown();
+    }
+  }
 
-		if( piksid < 0 )
-		{
-			open_failure_count++;
-			return false;
-		}
+  void heartbeat_callback(u16 sender_id, u8 len, u8 msg[], void* context)
+  {
+    if (context == NULL)
+    {
+      ROS_ERROR("Context void. Exiting heartbeat callback.");
+      return;
+    }
 
-		sbp_state_init(&state);
-		sbp_state_set_io_context(&state, &piksid);
+    msg_heartbeat_t hb = *(msg_heartbeat_t*) msg;
 
-        sbp_register_callback(&state, SBP_MSG_HEARTBEAT, &heartbeat_callback, (void*) this, &heartbeat_callback_node);
-        sbp_register_callback(&state, SBP_MSG_GPS_TIME, &time_callback, (void*) this, &time_callback_node);
-//		sbp_register_callback(&state, SBP_POS_ECEF, &pos_ecefCallback, (void*) this, &pos_ecef_callback_node);
-        sbp_register_callback(&state, SBP_MSG_POS_LLH, &pos_llh_callback, (void*) this, &pos_llh_callback_node);
-        sbp_register_callback(&state, SBP_MSG_DOPS, &dops_callback, (void*) this, &dops_callback_node);
-//		sbp_register_callback(&state, SBP_BASELINE_ECEF, &baseline_ecefCallback, (void*) this, &baseline_ecef_callback_node);
-        sbp_register_callback(&state, SBP_MSG_BASELINE_NED, &baseline_ned_callback, (void*) this, &baseline_ned_callback_node);
-//		sbp_register_callback(&state, SBP_VEL_ECEF, &vel_ecefCallback, (void*) this, &vel_ecef_callback_node);
-		sbp_register_callback(&state, SBP_MSG_VEL_NED, &vel_ned_callback, (void*) this, &vel_ned_callback_node);
+    class Piksi* driver = (class Piksi*) context;
+    
+    // Nothing to do right now.
 
-		llh_pub = nh.advertise<swiftnav_piksi_msgs::SbpPosLlh>( "piksi/pos_llh", 1 );
-		rtk_pub = nh.advertise<swiftnav_piksi_msgs::SbpBaseline>( "piksi/baseline", 1 );
-		time_pub = nh.advertise<swiftnav_piksi_msgs::SbpGpsTime>( "piksi/time", 1 );
+    return;
+  }
 
-		return true;
-	}
+  void time_callback(u16 sender_id, u8 len, u8 msg[], void* context)
+  {
+    if (context == NULL)
+    {
+      ROS_ERROR("Context void. Exiting Time callback.");
+      return;
+    }
 
-	void PIKSI::PIKSIClose( )
-	{
-		boost::mutex::scoped_lock lock( cmd_lock );
-		PIKSICloseNoLock( );
-	}
+    class Piksi* driver = (class Piksi*) context;
 
-	void PIKSI::PIKSICloseNoLock( )
-	{
-		int8_t old_piksid = piksid;
-		if( piksid < 0 )
-		{
-			return;
-		}
-		piksid = -1;
-		piksi_close( old_piksid );
-		if( llh_pub )
-			llh_pub.shutdown( );
-		if( time_pub )
-			time_pub.shutdown( );
-	}
+    msg_gps_time_t time = *(msg_gps_time_t*) msg;
 
-	void heartbeat_callback(u16 sender_id, u8 len, u8 msg[], void *context)
-	{
-		if ( context == NULL )
-		{
-			std::cerr << "Context void, OHSHIT" << std::endl;
-			return;
-		}
+    swiftnav_piksi_msgs::SbpGpsTimePtr time_msg( new swiftnav_piksi_msgs::SbpGpsTime );
+
+    time_msg->header.frame_id = driver->frame_id_;
+    time_msg->header.stamp = ros::Time::now( );
+    
+    time_msg->weeks = time.wn;
+    time_msg->time_of_week = time.tow;
+    time_msg->nano = time.ns_residual;
+    time_msg->time_source = (time.flags & 0x0007);
+    std::string desc("None");
+    if (time_msg->time_source)
+    {
+      desc = std::string("GNSS");
+    }
+    time_msg->time_source_description = desc;
+
+    driver->time_pub_.publish(time_msg);
+
+    return;
+  }
+
+  //assure that all parts of last_gps_fix_ are from the same time stamp
+  void attempt_gps_fix_pub(class Piksi* driver)
+  {
+    if (driver->gps_fix_sync_.pos_llh_time == driver->gps_fix_sync_.dops_time)
+    {
+      if (driver->gps_fix_sync_.pos_llh_time == driver->gps_fix_sync_.vel_time)
+      {
+        driver->gps_fix_pub_.publish(driver->last_gps_fix_);
+      }
+    }
+  }
+
+  void pos_llh_callback(u16 sender_id, u8 len, u8 msg[], void* context)
+  {
+    if (context == NULL)
+    {
+      ROS_ERROR("Context void. Exiting pos_llh callback.");
+      return;
+    }
+
+    class Piksi* driver = (class Piksi*) context;
+
+    msg_pos_llh_t llh = *(msg_pos_llh_t*) msg;
+
+    swiftnav_piksi_msgs::SbpPosLlhPtr llh_msg( new swiftnav_piksi_msgs::SbpPosLlh );
+
+    driver->gps_fix_sync_.pos_llh_time = llh.tow;
+
+    llh_msg->header.frame_id = driver->frame_id_;
+    llh_msg->header.stamp = ros::Time::now( );
+
+    llh_msg->time_of_week = llh.tow;
+
+    llh_msg->latitude = llh.lat;
+    llh_msg->longitude = llh.lon;
+    llh_msg->altitude = llh.height;
+
+    llh_msg->h_accuracy = static_cast<double>(llh.h_accuracy) * 0.001;
+    llh_msg->v_accuracy = static_cast<double>(llh.v_accuracy) * 0.001;
+
+    llh_msg->sats = llh.n_sats;
+
+    llh_msg->raim_repair = ((llh.flags & 0x0080) >> 7);
+    llh_msg->fix_type = (llh.flags & 0x007);
+    llh_msg->fix_description = driver->GetFixDescription(llh_msg->fix_type);
+
+    driver->llh_pub_.publish(llh_msg);
+
+    driver->last_gps_fix_.header = llh_msg->header;
+
+    //unfortunatly libsbp does not support a message that provides the number
+    //of satellites visible...only the number used in the solution
+    driver->last_gps_fix_.status.satellites_used = llh.n_sats;
+    driver->last_gps_fix_.status.satellites_visible = llh.n_sats;
+    driver->last_gps_fix_.status.status = driver->GetFixCode(llh_msg->fix_type);
+    
+    driver->last_gps_fix_.time = driver->GetUtcTime(llh.tow);
+    driver->last_gps_fix_.latitude = llh.lat;
+    driver->last_gps_fix_.longitude = llh.lon;
+    driver->last_gps_fix_.altitude = llh.height;
+
+    driver->last_gps_fix_.err_horz = llh_msg->h_accuracy;
+    driver->last_gps_fix_.err_vert = llh_msg->v_accuracy;
+    driver->last_gps_fix_.position_covariance[0] = std::pow(llh_msg->h_accuracy, 2);
+    driver->last_gps_fix_.position_covariance[4] = std::pow(llh_msg->h_accuracy, 2);
+    driver->last_gps_fix_.position_covariance[8] = std::pow(llh_msg->v_accuracy, 2);
+    driver->last_gps_fix_.position_covariance_type = 2;
+
+    attempt_gps_fix_pub(driver);
+    return;
+  }
+
+
+
+  void dops_callback(u16 sender_id, u8 len, u8 msg[], void* context)
+  {
+    if (context == NULL)
+    {
+      ROS_ERROR("Context void. Exiting dops_callback.");
+      return;
+    }
 		
-		msg_heartbeat_t hb = *(msg_heartbeat_t*) msg;
-
-		class PIKSI *driver = (class PIKSI*) context;
-        driver->heartbeat_pub_freq.tick();
-        driver->heartbeat_flags |= (hb.flags & 0x7);    // accumulate errors for diags
-
-		return;
-	}
-
-	void time_callback(u16 sender_id, u8 len, u8 msg[], void *context)
-	{
-		if ( context == NULL )
-		{
-			std::cerr << "Context void, OHSHIT" << std::endl;
-			return;
-		}
-
-		class PIKSI *driver = (class PIKSI*) context;
-
-		msg_gps_time_t time = *(msg_gps_time_t*) msg;
-
-		swiftnav_piksi_msgs::SbpGpsTimePtr time_msg( new swiftnav_piksi_msgs::SbpGpsTime );
-
-		time_msg->header.frame_id = driver->frame_id;
-		time_msg->header.stamp = ros::Time::now( );
-
-		time_msg->time_of_week = time.tow;
-		time_msg->nano = time.ns_residual;
-		time_msg->time_source = (time.flags & 0x0007);
-
-		driver->time_pub.publish( time_msg );
-
-		return;
-	}
-
-	void pos_llh_callback(u16 sender_id, u8 len, u8 msg[], void *context)
-	{
-		if ( context == NULL )
-		{
-			std::cerr << "Context void, OHSHIT" << std::endl;
-			return;
-		}
-
-		class PIKSI *driver = (class PIKSI*) context;
-
-		msg_pos_llh_t llh = *(msg_pos_llh_t*) msg;
-
-		swiftnav_piksi_msgs::SbpPosLlhPtr llh_msg( new swiftnav_piksi_msgs::SbpPosLlh );
-
-		llh_msg->header.frame_id = driver->frame_id;
-		llh_msg->header.stamp = ros::Time::now( );
-
-		llh_msg->time_of_week = llh.tow;
-
-		llh_msg->latitude = llh.lat;
-		llh_msg->longitude = llh.lon;
-		llh_msg->altitude = llh.height;
-
-		llh_msg->h_accuracy = llh.h_accuracy;
-		llh_msg->v_accuracy = llh.v_accuracy;
-
-		llh_msg->sats = llh.n_sats;
-
-		//flags
-		llh_msg->raim_repair = ((llh.flags & 0x0080) >> 7);
-		llh_msg->fix_type = (llh.flags & 0x007);
-		
-
-	driver->llh_pub.publish( llh_msg );
-
-        // populate diagnostic data
-		driver->llh_pub_freq.tick( );
-        driver->llh_status |= llh.flags;
-        driver->num_llh_satellites = llh.n_sats;
-        driver->llh_lat = llh.lat;
-        driver->llh_lon = llh.lon;
-        driver->llh_height = llh.height;
-        // FIXME: llh_h_accuracy doesn't work yet, so use hdop
-        //driver->llh_h_accuracy = llh.h_accuracy / 1000.0;
-        driver->llh_h_accuracy = driver->hdop;
-
-		return;
-	}
-
-	void dops_callback(u16 sender_id, u8 len, u8 msg[], void *context)
-	{
-		if ( context == NULL )
-		{
-			std::cerr << "Context void, OHSHIT" << std::endl;
-			return;
-		}
-		
-		msg_dops_t dops = *(msg_dops_t*) msg;
-
-		class PIKSI *driver = (class PIKSI*) context;
-
-        // FIXME: this is incorrect, but h_accuracy doesn't work yet
-        driver->llh_h_accuracy = dops.hdop;
-        //driver->heartbeat_pub_freq.tick();
-
-		return;
-	}
-
-/*	void baseline_ecef_callback(u16 sender_id, u8 len, u8 msg[], void *context)
-	{
-
-		if ( context == NULL )
-		{
-			std::cerr << "Context void, OHSHIT" << std::endl;
-			return;
-		}
-
-		class PIKSI *driver = (class PIKSI*) context;
-
-		sbp_gps_time_t time = *(sbp_gps_time_t*) msg;
-
-		sensor_msgs::TimeReferencePtr time_msg( new sensor_msgs::TimeReference );
-
-		time_msg->header.frame_id = driver->frame_id;
-		time_msg->header.stamp = ros::Time::now( );
-
-		time_msg->time_ref.sec = time.tow;
-		time_msg->source = "gps";
-
-		driver->time_pub.publish( time_msg );
-		// driver->piksi_pub_freq.tick( );
-
-		return;
-	}
-*/
-	void baseline_ned_callback(u16 sender_id, u8 len, u8 msg[], void *context)
-	{
-
-		if ( context == NULL )
-		{
-			std::cerr << "Context void, OHSHIT" << std::endl;
-			return;
-		}
-
-		class PIKSI *driver = (class PIKSI*) context;
-
-		msg_baseline_ned_t sbp_ned = *(msg_baseline_ned_t*) msg;
-
-		swiftnav_piksi_msgs::SbpBaselinePtr baseline_msg( new swiftnav_piksi_msgs::SbpBaseline );
-
-		baseline_msg->header.frame_id = driver->frame_id;
-        	// For best accuracy, header.stamp should maybe get tow converted to ros::Time
-		baseline_msg->header.stamp = ros::Time::now( );
-
-		baseline_msg->time_of_week = sbp_ned.tow;
-		baseline_msg->north = sbp_ned.n;
-		baseline_msg->east = sbp_ned.e;
-		baseline_msg->down = sbp_ned.d;
-		baseline_msg->h_accuracy = sbp_ned.h_accuracy;
-		baseline_msg->v_accuracy = sbp_ned.v_accuracy;
-		baseline_msg->sats = sbp_ned.n_sats;
-		baseline_msg->raim_repair = ((sbp_ned.flags & 0x0080) >> 7);
-		baseline_msg->fix_type = (sbp_ned.flags & 0x0007);
-
-
-		driver->rtk_pub.publish( baseline_msg );
-
-        // save diagnostic data
-		driver->rtk_pub_freq.tick( );
-        driver->rtk_status = sbp_ned.flags;
-        driver->num_rtk_satellites = sbp_ned.n_sats;
-		driver->rtk_north = sbp_ned.n;
-		driver->rtk_east = sbp_ned.e;
-        driver->rtk_height = sbp_ned.d;
-        // FIXME: rtk.h_accuracy doesn't work yet
-        //driver->rtk_h_accuracy = rtk.h_accuracy / 1000.0;
-
-		return;
-	}
-/*
-	void vel_ecef_callback(u16 sender_id, u8 len, u8 msg[], void *context)
-	{
-		if ( context == NULL )
-		{
-			std::cerr << "Context void, OHSHIT" << std::endl;
-			return;
-		}
-
-		class PIKSI *driver = (class PIKSI*) context;
-
-		sbp_gps_time_t time = *(sbp_gps_time_t*) msg;
-
-		sensor_msgs::TimeReferencePtr time_msg( new sensor_msgs::TimeReference );
-
-		time_msg->header.frame_id = driver->frame_id;
-		time_msg->header.stamp = ros::Time::now( );
-
-		time_msg->time_ref.sec = time.tow;
-		time_msg->source = "gps";
-
-		driver->time_pub.publish( time_msg );
-		// driver->piksi_pub_freq.tick( );
-
-		return;
-	}
-*/
-
-	void vel_ned_callback(u16 sender_id, u8 len, u8 msg[], void *context)
-	{
-		if ( context == NULL )
-		{
-			std::cerr << "Context void, OHSHIT" << std::endl;
-			return;
-		}
-
-		class PIKSI *driver = (class PIKSI*) context;
-
-		msg_vel_ned_t sbp_vel = *(msg_vel_ned_t*) msg;
-
-        // save velocity in the Twist member of a private Odometry msg, from where it
-        // will be pulled to populate a published Odometry msg next time a
-        // msg_baseline_ned_t message is received
-        driver->rtk_vel_north = sbp_vel.n/1000.0;
-        driver->rtk_vel_east = sbp_vel.e/1000.0;
-        driver->rtk_vel_up = -sbp_vel.d/1000.0;
-
-		return;
-	}
-
-	void PIKSI::spin( )
-	{
-		while( ros::ok( ) )
-		{
-			boost::this_thread::interruption_point( );
-			PIKSI::spinOnce( );
-			heartbeat_diag.update( );
-			llh_diag.update( );
-			rtk_diag.update( );
-			spin_rate.sleep( );
-		}
-	}
-
-	void PIKSI::spinOnce( )
-	{
-		int ret;
-
-		cmd_lock.lock( );
-		if( piksid < 0 && !PIKSIOpenNoLock( ) )
-		{
-			cmd_lock.unlock( );
-			return;
-		}
-
-		ret = sbp_process( &state, &read_data );
-		cmd_lock.unlock( );
-	}
-
-	void PIKSI::DiagCB( diagnostic_updater::DiagnosticStatusWrapper &stat )
-	{
-		stat.summary( diagnostic_msgs::DiagnosticStatus::OK, "PIKSI status OK" );
-		boost::mutex::scoped_lock lock( cmd_lock );
-
-		if( piksid < 0 && !PIKSIOpenNoLock( ) )
-		{
-			stat.summary( diagnostic_msgs::DiagnosticStatus::ERROR, "Disconnected" );
-			return;
-		}
-		else if( open_failure_count > last_open_failure_count )
-        {
-			stat.summary( diagnostic_msgs::DiagnosticStatus::ERROR, 
-                            "Open Failure Count Increase" );
-        }
-		else if( io_failure_count > last_io_failure_count )
-        {
-			stat.summary( diagnostic_msgs::DiagnosticStatus::WARN, 
-                            "I/O Failure Count Increase" );
-        }
-        else if( 0 != heartbeat_flags & 0x7 )
-        {
-			stat.summary( diagnostic_msgs::DiagnosticStatus::ERROR, 
-                            "Piksi Error indicated by heartbeat flags" );
-        }
-        else if( num_rtk_satellites < 5 )
-        {
-			stat.summary( diagnostic_msgs::DiagnosticStatus::WARN, 
-                            "RTK Satellite fix invalid: too few satellites in view" );
-        }
-        else if( rtk_status != 1 )
-        {
-			stat.summary( diagnostic_msgs::DiagnosticStatus::WARN, 
-                            "No GPS RTK fix" );
-        }
-
-		stat.add( "io_failure_count", io_failure_count );
-		last_io_failure_count = io_failure_count;
-
-		stat.add( "open_failure_count", open_failure_count );
-		last_open_failure_count = open_failure_count;
-
-        stat.add( "Heartbeat status (0 = good)", heartbeat_flags);
-        stat.add( "Number of satellites used in GPS RTK solution", num_rtk_satellites );
-        stat.add( "GPS RTK solution status (1 = good)", rtk_status );
-        stat.add( "GPS RTK meters north", rtk_north );
-        stat.add( "GPS RTK meters east", rtk_east );
-        stat.add( "GPS RTK height difference (m)", rtk_height );
-        stat.add( "GPS RTK horizontal accuracy (m)", rtk_h_accuracy );
-        stat.add( "GPS RTK velocity north", rtk_vel_north );
-        stat.add( "GPS RTK velocity east", rtk_vel_east );
-        stat.add( "GPS RTK velocity up", rtk_vel_up );
-        stat.add( "Number of satellites used for lat/lon", num_llh_satellites);
-        stat.add( "GPS lat/lon solution status", llh_status );
-        stat.add( "GPS latitude", llh_lat );
-        stat.add( "GPS longitude", llh_lon );
-        stat.add( "GPS altitude", llh_height );
-        stat.add( "GPS lat/lon horizontal accuracy (m)", llh_h_accuracy);
-	}
-
+    msg_dops_t dops = *(msg_dops_t*) msg;
+
+    class Piksi* driver = (class Piksi*) context;
+    swiftnav_piksi_msgs::SbpDopsPtr dop_msg(new swiftnav_piksi_msgs::SbpDops);
+
+    driver->gps_fix_sync_.dops_time = dops.tow;
+
+    dop_msg->header.frame_id = driver->frame_id_;
+    dop_msg->header.stamp = ros::Time::now();
+
+    dop_msg->time_of_week = dops.tow;
+    dop_msg->gdop = static_cast<double>(dops.gdop) * 0.01;
+    dop_msg->pdop = static_cast<double>(dops.pdop) * 0.01;
+    dop_msg->tdop = static_cast<double>(dops.tdop) * 0.01;
+    dop_msg->hdop = static_cast<double>(dops.hdop) * 0.01;
+    dop_msg->vdop = static_cast<double>(dops.vdop) * 0.01;
+    dop_msg->raim_repair = ((dops.flags & 0x0080) >> 7);
+    dop_msg->fix_type = (dops.flags & 0x0007);
+    dop_msg->fix_description = driver->GetFixDescription(dop_msg->fix_type);
+
+    driver->dop_pub_.publish(dop_msg);
+
+    driver->last_gps_fix_.gdop = dop_msg->gdop;
+    driver->last_gps_fix_.pdop = dop_msg->pdop;
+    driver->last_gps_fix_.tdop = dop_msg->tdop;
+    driver->last_gps_fix_.hdop = dop_msg->hdop;
+    driver->last_gps_fix_.vdop = dop_msg->vdop;
+
+    attempt_gps_fix_pub(driver);
+    return;
+  }
+
+  void baseline_ned_callback(u16 sender_id, u8 len, u8 msg[], void* context)
+  {
+    if (context == NULL)
+    {
+      ROS_ERROR("Context void. Exiting baseline_ned_callback.");
+      return;
+    }
+
+    class Piksi* driver = (class Piksi*) context;
+
+    msg_baseline_ned_t sbp_ned = *(msg_baseline_ned_t*) msg;
+
+    swiftnav_piksi_msgs::SbpBaselinePtr baseline_msg( new swiftnav_piksi_msgs::SbpBaseline );
+
+    baseline_msg->header.frame_id = driver->frame_id_;
+    // For best accuracy, header.stamp should maybe get tow converted to ros::Time
+    baseline_msg->header.stamp = ros::Time::now( );
+
+    baseline_msg->time_of_week = sbp_ned.tow;
+    baseline_msg->north = static_cast<double>(sbp_ned.n) * 0.001;
+    baseline_msg->east = static_cast<double>(sbp_ned.e) * 0.001;
+    baseline_msg->down = static_cast<double>(sbp_ned.d) * 0.001;
+    baseline_msg->h_accuracy = static_cast<double>(sbp_ned.h_accuracy) * 0.001;
+    baseline_msg->v_accuracy = static_cast<double>(sbp_ned.v_accuracy) * 0.001;
+    baseline_msg->sats = sbp_ned.n_sats;
+    baseline_msg->raim_repair = ((sbp_ned.flags & 0x0080) >> 7);
+    baseline_msg->fix_type = (sbp_ned.flags & 0x0007);
+    baseline_msg->fix_description = driver->GetFixDescription(baseline_msg->fix_type);
+
+    driver->rtk_pub_.publish(baseline_msg);
+    return;
+  }
+
+  void vel_ned_callback(u16 sender_id, u8 len, u8 msg[], void* context)
+  {
+    if (context == NULL)
+    {
+      ROS_ERROR("Context void. Exiting vel_ned_callback");
+      return;
+    }
+
+    class Piksi* driver = (class Piksi*) context;
+
+    msg_vel_ned_t sbp_vel = *(msg_vel_ned_t*) msg;
+
+    swiftnav_piksi_msgs::SbpVelNedPtr vel_msg(new swiftnav_piksi_msgs::SbpVelNed);
+
+    driver->gps_fix_sync_.vel_time = sbp_vel.tow;
+
+    vel_msg->header.frame_id = driver->frame_id_;
+    vel_msg->header.stamp = ros::Time::now();
+
+    vel_msg->time_of_week = sbp_vel.tow;
+    vel_msg->vel_north = static_cast<double>(sbp_vel.n) * 0.001;
+    vel_msg->vel_east = static_cast<double>(sbp_vel.e) * 0.001;
+    vel_msg->vel_down = static_cast<double>(sbp_vel.d) * 0.001;
+    vel_msg->h_accuracy = static_cast<double>(sbp_vel.h_accuracy) * 0.001;
+    vel_msg->v_accuracy = static_cast<double>(sbp_vel.v_accuracy) * 0.001;
+    
+    vel_msg->sats = sbp_vel.n_sats;
+    vel_msg->velocity_mode = (sbp_vel.flags & 0x0007);
+    std::string desc("Invalid");
+    if (vel_msg->velocity_mode == 1)
+    {
+      desc = std::string("Measured Doppler derived");
+    }
+    else if (vel_msg->velocity_mode == 2)
+    {
+      desc = std::string("Computed Doppler derived");
+    }
+    vel_msg->velocity_mode_description = desc;
+
+    driver->vel_pub_.publish(vel_msg);
+
+    // TODO(kkozak): We're using this velocity message to infer heading for now,
+    //               but the piksi can output a heading message that can 
+    //               possibly be used instead, though it may only give relative 
+    //               direction of rover with respect to base, which is not the 
+    //               heading that we care about.
+    double vx = vel_msg->vel_north;
+    double vy = vel_msg->vel_east;
+    double speed = std::sqrt(vx*vx + vy*vy);
+    driver->last_gps_fix_.speed = speed;
+
+    //piksi track is (-180,180] but we need [0,360)
+    double track = std::atan2(vy, vx) * 180.0 / M_PI;
+    if (track < 0)
+    {
+	  track = track + 360.0;
+    }
+    driver->last_gps_fix_.track = track;
+    attempt_gps_fix_pub(driver);
+
+    return;
+  }
+
+
+  double Piksi::GetUtcTime(uint32_t ms)
+  {
+    // TODO(kkozak): This needs to be verified, and offset needs to be captured
+    //               automatically, rather than from the default value.
+    // 2017-03-03 -- It looks right compared to online UTC clock
+    // check for utc_offset_ message
+    double seconds = static_cast<double>(ms) * 0.001 + utc_offset_;
+    int32_t days = seconds / 86400.0;
+    double utc_time = seconds - days * 86400.0;
+    return utc_time;
+  }
+
+  int16_t Piksi::GetFixCode(uint8_t fix_type)
+  {
+    int16_t fix_code;
+    switch (fix_type)
+    {
+    case 0:
+      fix_code = -1;
+      break;
+    case 1:
+      fix_code = 0;
+      break;
+    case 2:
+      fix_code = 18;
+      break;
+    case 3:
+      fix_code = 96;
+      break;
+    case 4:
+      fix_code = 97;
+      break;
+    default: 
+      fix_code = -1;
+    }
+    return fix_code;
+  }
+
+  std::string Piksi::GetFixDescription(uint8_t fix_type)
+  {
+    std::string fix_description("");
+    switch (fix_type)
+    {
+    case 0:
+      fix_description = std::string("Invalid");
+      break;
+    case 1:
+      fix_description = std::string("SPP");
+      break;
+    case 2:
+      fix_description = std::string("DGNSS");
+      break;
+    case 3:
+      fix_description = std::string("Float RTK");
+      break;
+    case 4:
+      fix_description = std::string("Fixed RTK");
+      break;
+    default: 
+      fix_description = "Invalid";
+    }
+    return fix_description;
+  }
+  void Piksi::spin()
+  {
+    while (ros::ok())
+    {
+      boost::this_thread::interruption_point();
+      Piksi::spinOnce();
+      spin_rate_.sleep();
+    }
+  }
+
+  void Piksi::spinOnce()
+  {
+    int ret;
+
+    cmd_lock.lock();
+    if(piksid_ < 0 && !PiksiOpenNoLock())
+    {
+      cmd_lock.unlock();
+      return;
+    }
+
+    ret = sbp_process( &state_, &read_data );
+    cmd_lock.unlock();
+  }
 }

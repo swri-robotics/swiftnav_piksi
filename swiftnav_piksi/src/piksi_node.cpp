@@ -42,40 +42,14 @@
 #include <ros/ros.h>
 #include <cstdlib>
 
-/*!
-* \brief Main Function
-*
-* \author Scott K Logan
-*
-* Initializes ROS, instantiates the node handle for the driver to use and
-* instantiates the PIKSI class.
-*
-* \param argc Number of command line arguments
-* \param argv 2D character array of command line arguments
-*
-* \returns EXIT_SUCCESS, or an error state
-*/
 int main( int argc, char *argv[] )
 {
-	ros::init( argc, argv, "piksi_node" );
+  ros::init( argc, argv, "piksi_node" );
 
-	ros::NodeHandle nh;
-	ros::NodeHandle nh_priv( "~" );
+  ros::NodeHandle nh;
 
-	std::string port;
-	nh_priv.param( "port", port, (const std::string)"/dev/ttyUSB0" );
-	int baud;
-	nh_priv.param( "baud", baud, 152000 );
+  swiftnav_piksi::Piksi piksi(nh);
 
-	swiftnav_piksi::PIKSI piksi( nh, nh_priv, port );
-
-	ROS_DEBUG( "Opening Piksi on %s", port.c_str( ) );
-	if( !piksi.PIKSIOpen( ) )
-		ROS_ERROR( "Failed to open Piksi on %s", port.c_str( ) );
-	else
-		ROS_INFO( "Piksi opened successfully on %s", port.c_str( ) );
-
-	ros::spin( );
-
-	std::exit( EXIT_SUCCESS );
+  ros::spin( );
+  std::exit(EXIT_SUCCESS);
 }
