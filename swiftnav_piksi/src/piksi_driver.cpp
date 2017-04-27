@@ -20,12 +20,14 @@ namespace swiftnav_piksi
     piksid_(-1),
     utc_offset_(-18), // As of 2016-12-31
     spin_rate_(2000),
-    open_failure_count_(0)
+    open_failure_count_(0),
+    publish_invalid_fixes_(false)
   {
     pnh_ = ros::NodeHandle("~");
     pnh_.param("port", port_, std::string("/dev/ttyUSB0"));
     pnh_.param("baud", baud_, 152000);
     pnh_.param("frame_id", frame_id_, std::string("piksi_gps"));
+    pnh_.param("publish_invalid_fixes", publish_invalid_fixes_, false);
     
     dop_pub_ = nh_.advertise<swiftnav_piksi_msgs::SbpDops>("piksi/dops", 2);
     llh_pub_ = nh_.advertise<swiftnav_piksi_msgs::SbpPosLlh>("piksi/pos_llh", 2);
@@ -181,7 +183,11 @@ namespace swiftnav_piksi
     {
       if (driver->gps_fix_sync_.pos_llh_time == driver->gps_fix_sync_.vel_time)
       {
-        driver->gps_fix_pub_.publish(driver->last_gps_fix_);
+        if (driver->publish_invalid_fixes_ || driver->last_gps_fix_.position_covariance_type >= 0)
+        {
+          // By default, only publish if there is a fix
+          driver->gps_fix_pub_.publish(driver->last_gps_fix_);
+        }
       }
     }
   }
@@ -255,7 +261,7 @@ namespace swiftnav_piksi
       ROS_ERROR("Context void. Exiting dops_callback.");
       return;
     }
-		
+    	
     msg_dops_t dops = *(msg_dops_t*) msg;
 
     class Piksi* driver = (class Piksi*) context;
@@ -376,7 +382,7 @@ namespace swiftnav_piksi
     double track = std::atan2(vy, vx) * 180.0 / M_PI;
     if (track < 0)
     {
-	  track = track + 360.0;
+      track = track + 360.0;
     }
     driver->last_gps_fix_.track = track;
     attempt_gps_fix_pub(driver);

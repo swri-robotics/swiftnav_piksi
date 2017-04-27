@@ -94,6 +94,7 @@ namespace swiftnav_piksi
     int8_t piksid_;
     int32_t utc_offset_;
     boost::mutex cmd_lock;
+    bool publish_invalid_fixes_;
 
     sbp_state_t state_;
     sbp_msg_callbacks_node_t heartbeat_callback_node;
